@@ -11,10 +11,18 @@ It is **not** a bundled emulator. Tools that advertise "SGDK compiles to
 executes as 68000 code and every hardware limit stays. Here the game code
 is compiled for the host.
 
-## Status: proof of concept
+## Status: grows one game at a time
 
-Extracted from a working game (a Mega Drive port of *Pitfall!*, which runs
-natively at 1280x896 and 60 fps from a single 3 MB executable). It
+This is deliberately not an attempt to reimplement all of SGDK up front.
+The layer grows as games need it: each port that targets PC adds the
+functions it actually calls, with the semantics proven by that game
+running correctly. Writing the whole API blind would produce a lot of
+untested code — and the details that matter only surface under a real
+game. The plane composition order below, for example, was only pinned
+down because *Pitfall!* depends on it to hide the player as he sinks.
+
+Extracted from the first such game (a Mega Drive port of *Pitfall!*, which
+runs natively at 1280x896 and 60 fps from a single 3 MB executable). It
 currently implements the **15 functions that game used**:
 
 ```
@@ -35,9 +43,18 @@ the sample game needed, and anything that writes VDP ports directly or
 uses raster effects on the horizontal interrupt.
 
 So: a game that sticks to the API subset above will build and run. Most
-real games will hit a missing function on the first try — the point of
-publishing this is that adding one is usually small, and the hard part
-(the VDP model) is already here.
+real games will hit a missing function on the first try — that is
+expected, and it is the intended way to extend this: implement what your
+game needs, verify it against the same game running on hardware or in an
+emulator, and add it here. The hard part (the VDP model) is already done,
+so a new function is usually small.
+
+### Games driving this layer
+
+| game | added |
+|---|---|
+| Pitfall! (Mega Drive port) | the initial 15 functions, VDP model, PSG, input |
+
 
 ## What it models
 
