@@ -50,7 +50,13 @@ SECTIONS
 {
   .text 0x00000000:
   {
-    KEEP(*(.text.keepboot)) *(.text.*) *(.text)
+    KEEP(*(.text.keepboot))
+    /* SVP (SSP1601) program area, see inc/svp/svp.h. The DSP starts executing
+       at program word $400 = cartridge byte $800, so that area must be free of
+       68000 code. Only applies when a project links the SVP module in. */
+    . = DEFINED(SVP_program) ? 0x800 : . ;
+    KEEP(*(.svp_program))
+    *(.text.*) *(.text)
     . = ALIGN(0x4);
      __CTOR_LIST__ = .;
     LONG((__CTOR_END__ - __CTOR_LIST__) / 4 - 2)

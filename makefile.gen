@@ -66,6 +66,19 @@ SRC_S80 += $(wildcard $(SRC_DIR)/*/*/*.s80)
 SRC_S80 += $(wildcard $(SRC_DIR)/*/*/*/*.s80)
 SRC_S80 += $(wildcard $(SRC_DIR)/*/*/*/*/*.s80)
 SRC_S80 := $(SRC_S80)
+SRC_SVP = $(wildcard *.svp)
+SRC_SVP += $(wildcard $(SRC_DIR)/*.svp)
+SRC_SVP += $(wildcard $(SRC_DIR)/*/*.svp)
+SRC_SVP += $(wildcard $(SRC_DIR)/*/*/*.svp)
+SRC_SVP += $(wildcard $(SRC_DIR)/*/*/*/*.svp)
+SRC_SVP += $(wildcard $(SRC_DIR)/*/*/*/*/*.svp)
+# strip: the += above leave whitespace behind, and this list is tested with ifneq
+SRC_SVP := $(strip $(SRC_SVP))
+# a project with SVP code must get the reserved program area linked in, even if
+# it never calls the C API, otherwise 68000 code lands where the DSP starts
+ifneq ($(SRC_SVP),)
+	SVP_LFLAGS := -Wl,-u,SVP_program
+endif
 
 RES_RES = $(wildcard *.res)
 RES_RES += $(wildcard $(RES_DIR)/*.res)
@@ -175,6 +188,33 @@ padROM:	$(OUT_DIR)/rom.bin
 injectSymbolsInROM:	$(OUT_DIR)/rom.bin $(OUT_DIR)/symbol.txt
 	$(CONVSYM) $(OUT_DIR)/symbol.txt $(OUT_DIR)/rom.bin -in txt -inopt " /fmt='%X %*[TtBbCcDd] %511s' /offsetFirst+" -range 0 FFFFFF -a -ref @MDDBG__SymbolDataPtr
 
+# SVP (SSP1601) sources are assembled by the external 'ssp16asm' tool and
+# injected into the linked ROM image, DSP program word $400 landing at
+# cartridge byte $800 (see the .svp_program section in md.ld). This has to
+# happen before padROM, which computes the ROM checksum.
+ifneq ($(SRC_SVP),)
+padROM: injectSVP
+injectSymbolsInROM: injectSVP
+.PHONY: injectSVP
+
+injectSVP:	$(OUT_DIR)/rom.bin $(SRC_SVP)
+	@command -v $(ASMSVP) > /dev/null 2>&1 || { $(ECHO) "ERROR: SVP assembler '$(ASMSVP)' not found in PATH, get it from https://github.com/jdesiloniz/svpdev (tools/ssp16asm)"; exit 1; }
+	@area=`$(NM) -S $(OUT_DIR)/rom.out | grep ' SVP_program$$'`; \
+	[ -n "$$area" ] || { $(ECHO) "ERROR: no SVP program area found in the ROM, either the SVP module did not get linked in or 'nm -S' is unavailable"; exit 1; }; \
+	first=$$((0x`$(ECHO) $$area | cut -d' ' -f1`)); past=$$((first + 0x`$(ECHO) $$area | cut -d' ' -f2`)); \
+	for svp in $(SRC_SVP); do \
+		$(ASMSVP) -b "$(OUT_DIR)/rom.bin" "$$svp" "$(OUT_DIR)/rom_svp.bin" || exit 1; \
+		if command -v cmp > /dev/null 2>&1; then \
+			cmp -s -n $$first "$(OUT_DIR)/rom.bin" "$(OUT_DIR)/rom_svp.bin" || { $(ECHO) "ERROR: $$svp writes below cartridge byte $$first, its 'org' must not be lower than 400"; exit 1; }; \
+			cmp -s -i $$past:$$past "$(OUT_DIR)/rom.bin" "$(OUT_DIR)/rom_svp.bin" || { $(ECHO) "ERROR: $$svp overruns the SVP area reserved from byte $$first to $$past, raise SVP_PROGRAM_SIZE"; exit 1; }; \
+		else \
+			$(ECHO) "WARNING: 'cmp' not found, the SVP program area bound check was skipped"; \
+		fi; \
+		$(CP) "$(OUT_DIR)/rom_svp.bin" "$(OUT_DIR)/rom.bin" || exit 1; \
+	done
+	@$(RM) -f $(OUT_DIR)/rom_svp.bin
+endif
+
 
 $(OUT_DIR)/rom.bin: $(OUT_DIR)/rom.out $(OUT_DIR)/symbol.txt
 	$(OBJCPY) -O binary $(OUT_DIR)/rom.out $(OUT_DIR)/rom.bin
@@ -184,7 +224,7 @@ $(OUT_DIR)/symbol.txt: $(OUT_DIR)/rom.out
 
 $(OUT_DIR)/rom.out: $(OUT_DIR)/sega.o $(OUT_DIR)/cmd_ $(LIBMD)
 	@$(MKDIR) -p $(dir $@)
-	$(CC) -m68000 -B$(BIN) -n -T $(GDK)/md.ld -nostdlib $(OUT_DIR)/sega.o @$(OUT_DIR)/cmd_ $(LIBMD) $(LIBGCC) -o $(OUT_DIR)/rom.out -Wl,--gc-sections -flto -flto=auto -ffat-lto-objects
+	$(CC) -m68000 -B$(BIN) -n -T $(GDK)/md.ld -nostdlib $(SVP_LFLAGS) $(OUT_DIR)/sega.o @$(OUT_DIR)/cmd_ $(LIBMD) $(LIBGCC) -o $(OUT_DIR)/rom.out -Wl,--gc-sections -flto -flto=auto -ffat-lto-objects
 	@$(RM) $(OUT_DIR)/cmd_
 
 $(OUT_DIR)/cmd_: $(OBJS)

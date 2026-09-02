@@ -62,6 +62,10 @@ else
 	LIBGCC := -lgcc
 endif
 
+# SVP (SSP1601) assembler: external dependency, expected in PATH.
+# See https://github.com/jdesiloniz/svpdev (tools/ssp16asm)
+ASMSVP ?= ssp16asm
+
 JAVA := java
 ECHO := echo
 SIZEBND := $(JAVA) -jar $(BIN)/sizebnd.jar
