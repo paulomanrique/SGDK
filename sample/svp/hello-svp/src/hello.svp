@@ -23,10 +23,16 @@ ReplyBad:           EQU 0xDEAD      # answer to anything else
 
 # ---- hardware constants ---------------------------------------------------
 
-# with ST5 / ST6 clear the external registers are the 68000 interface:
-# ext0 is the PM0 status register and ext3 is the XST mailbox.
+# The two ST bits that pick what the external registers mean. With them clear,
+# ext0 is the PM0 status register and ext3 is the XST mailbox; with them set,
+# ext0 to ext7 are external memory pointers instead.
 StMailbox:          EQU 0x0000
-# with ST5 / ST6 set they are external memory pointers instead.
+# 0x0030 is what the published SVP samples use. Beware that the two sources
+# disagree on the numbering: the reverse engineering notes call these ST5 and
+# ST6 (which would be 0x0060) while the samples write 0x0030, i.e. bits 4 and
+# 5. It works either way because the test is a mask, not a comparison: only
+# bit 5 is actually looked at, and 0x0030 and 0x0060 both contain it. Verified
+# on Genesis Plus GX with both values.
 StExtMem:           EQU 0x0030
 
 # PM0 bit raised when the 68000 writes the mailbox, cleared when we read PM0.
