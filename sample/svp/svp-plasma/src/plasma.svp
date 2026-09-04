@@ -1,0 +1,471 @@
+# ---------------------------------------------------------------------------
+#  plasma.svp
+#
+#  SVP (Samsung SSP1601) side of the SGDK 'svp-plasma' demo.
+#
+#  On every command from the 68000 the DSP renders a full animated plasma
+#  field straight into the DRAM the two processors share, as finished VDP
+#  tilemap words. The 68000 never computes a pixel: it just DMAs the DRAM into
+#  video memory. That is the division of labour the SVP was built for.
+#
+#  Layout produced in DRAM, starting at word 0:
+#     28 rows of 64 words, matching a 64 tile wide plane, so the whole visible
+#     screen is one contiguous block and one single DMA.
+#
+#  The sine table is copied into internal RAM bank A at boot. Bank A is exactly
+#  256 words and the pointer registers are 8 bit, so `ld a, (r0+)` walks the
+#  table and wraps around on its own: the plasma needs no masking at all.
+#
+#  Assembled by 'ssp16asm', injected at cartridge byte 0x800 by the SGDK build.
+# ---------------------------------------------------------------------------
+
+# ---- protocol, kept in sync with src/main.c -------------------------------
+
+CmdFrame:           EQU 0x0001      # "render one frame"
+ReplyDone:          EQU 0x0055      # "the DRAM holds a finished frame"
+TileBase:           EQU 0x0010      # = TILE_USER_INDEX on the 68000 side
+
+# ---- geometry -------------------------------------------------------------
+
+RowCount:           EQU 0x001C      # 28 rows
+GroupsPerRow:       EQU 0x0008      # 8 groups of 8 cells = 64 words per row
+
+# ---- hardware constants ---------------------------------------------------
+
+StMailbox:          EQU 0x0000      # ext0 = PM0 status, ext3 = XST mailbox
+StExtMem:           EQU 0x0030      # ext0..ext7 = external memory pointers
+Pm0M68kWrote:       EQU 0x0002      # PM0 bit raised when the 68000 writes XST
+
+DramStart:          EQU 0x0000      # DRAM word 0
+DramAutoInc:        EQU 0x0818      # DRAM, auto-increment one word per write
+
+# ---- animation ------------------------------------------------------------
+
+PhaseStep:          EQU 0x0003      # how fast the field drifts per frame
+RowStepY:           EQU 0x0009      # vertical frequency
+RowStepX:           EQU 0x0003      # horizontal shear, gives the diagonal look
+
+org 400
+
+# ---------------------------------------------------------------------------
+#  boot: copy the sine table from cartridge ROM into internal RAM bank A
+# ---------------------------------------------------------------------------
+
+# NOTE: this file deliberately never uses the `ld a, A[nn]` / `ld a, B[nn]`
+# RAM bank load. ssp16asm counts that instruction as zero words in its symbol
+# pass while emitting one, so every label defined after it comes out one word
+# too low and every branch silently jumps one instruction early. The animation
+# phase therefore lives in r6, which is 8 bit and wraps on its own anyway.
+
+start:                  eor a, a                # clears the whole 32 bit A,
+                        ld st, @StMailbox       # AL stays 0 for every loop test
+                        ldi r6, 00              # animation phase = 0
+
+                        ldi r0, 00
+copySine:               ld a, r0
+                        addi a, @SineTable      # program space address of entry r0
+                        ld y, (a)               # read it out of cartridge ROM
+                        ld a, y
+                        ld (r0+), a             # RAM0[r0] = entry, then r0++
+                        ld a, r0
+                        cmpi a, 0000            # r0 wrapped: all 256 entries done
+                        bra z=0, @copySine
+
+# ---------------------------------------------------------------------------
+#  main loop: one command from the 68000 renders one frame
+# ---------------------------------------------------------------------------
+
+waitCommand:            ld a, ext0
+                        andi a, @Pm0M68kWrote
+                        bra z=1, @waitCommand
+                        ld x, ext3              # consume the command word
+
+                        ld st, @StExtMem        # ext registers become pointers
+                        ld ext6, @DramStart     # PMC: address
+                        ld ext6, @DramAutoInc   # PMC: mode
+                        ld ext0, -              # blind access, arms PM0
+
+                        ld a, r6                # this frame's phase
+                        ld r1, a                # vertical sine index
+                        ld r2, a                # start of the horizontal sweep
+                        ldi r5, 1C              # row counter
+
+rowLoop:                ld y, (r1)              # sy, constant across the row
+                        ld a, r2
+                        ld r0, a                # horizontal index for this row
+                        ldi r4, 08              # 8 groups of 8 cells
+
+cellGroup:
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        ld a, (r0+)             # sx = sine[r0], r0 wraps at 256
+                        add a, y                # + sy, constant for this row
+                        mod always, shr         # >> 5 : 0..510 becomes 0..15,
+                        mod always, shr         # exactly one palette cycle over
+                        mod always, shr         # the whole range, so the field
+                        mod always, shr         # never wraps abruptly
+                        mod always, shr
+                        andi a, 000F            # keep 4 bits, this also clears AL
+                        addi a, @TileBase       # make it a VDP tilemap word
+                        ld ext0, a              # store, PM0 auto-increments
+                        eor a, a                # clear A so the 32 bit Z test
+                        ld a, r4                # below only looks at the counter
+                        subi a, 0001
+                        ld r4, a
+                        bra z=0, @cellGroup
+
+                        ld a, r1                # next row: advance both indices
+                        addi a, @RowStepY
+                        ld r1, a
+                        ld a, r2
+                        addi a, @RowStepX
+                        ld r2, a
+
+                        eor a, a
+                        ld a, r5
+                        subi a, 0001
+                        ld r5, a
+                        bra z=0, @rowLoop
+
+                        ld a, r6                # drift the field for next frame
+                        addi a, @PhaseStep
+                        ld r6, a                # r6 is 8 bit, so it wraps by itself
+
+                        ld st, @StMailbox       # ext3 is the mailbox again
+                        ld ext3, @ReplyDone     # tell the 68000 the frame is up
+                        bra always, @waitCommand
+
+# ---------------------------------------------------------------------------
+#  256 entry table holding two full sine periods scaled to 0..255. Two periods
+#  rather than one so that a 64 cell row sweeps half a wave and the bands come
+#  out curved instead of a flat diagonal ramp.
+#  Every value is written with four hex digits on purpose: ssp16asm mis-counts
+#  the size of a 'dw' whose operand has one or two digits, which would shift
+#  every label defined after this table.
+# ---------------------------------------------------------------------------
+
+SineTable:
+                        dw 0080
+                        dw 0086
+                        dw 008C
+                        dw 0092
+                        dw 0098
+                        dw 009E
+                        dw 00A5
+                        dw 00AA
+                        dw 00B0
+                        dw 00B6
+                        dw 00BC
+                        dw 00C1
+                        dw 00C6
+                        dw 00CB
+                        dw 00D0
+                        dw 00D5
+                        dw 00DA
+                        dw 00DE
+                        dw 00E2
+                        dw 00E6
+                        dw 00EA
+                        dw 00ED
+                        dw 00F0
+                        dw 00F3
+                        dw 00F5
+                        dw 00F8
+                        dw 00FA
+                        dw 00FB
+                        dw 00FD
+                        dw 00FE
+                        dw 00FE
+                        dw 00FF
+                        dw 00FF
+                        dw 00FF
+                        dw 00FE
+                        dw 00FE
+                        dw 00FD
+                        dw 00FB
+                        dw 00FA
+                        dw 00F8
+                        dw 00F5
+                        dw 00F3
+                        dw 00F0
+                        dw 00ED
+                        dw 00EA
+                        dw 00E6
+                        dw 00E2
+                        dw 00DE
+                        dw 00DA
+                        dw 00D5
+                        dw 00D0
+                        dw 00CB
+                        dw 00C6
+                        dw 00C1
+                        dw 00BC
+                        dw 00B6
+                        dw 00B0
+                        dw 00AA
+                        dw 00A5
+                        dw 009E
+                        dw 0098
+                        dw 0092
+                        dw 008C
+                        dw 0086
+                        dw 0080
+                        dw 0079
+                        dw 0073
+                        dw 006D
+                        dw 0067
+                        dw 0061
+                        dw 005A
+                        dw 0055
+                        dw 004F
+                        dw 0049
+                        dw 0043
+                        dw 003E
+                        dw 0039
+                        dw 0034
+                        dw 002F
+                        dw 002A
+                        dw 0025
+                        dw 0021
+                        dw 001D
+                        dw 0019
+                        dw 0015
+                        dw 0012
+                        dw 000F
+                        dw 000C
+                        dw 000A
+                        dw 0007
+                        dw 0005
+                        dw 0004
+                        dw 0002
+                        dw 0001
+                        dw 0001
+                        dw 0000
+                        dw 0000
+                        dw 0000
+                        dw 0001
+                        dw 0001
+                        dw 0002
+                        dw 0004
+                        dw 0005
+                        dw 0007
+                        dw 000A
+                        dw 000C
+                        dw 000F
+                        dw 0012
+                        dw 0015
+                        dw 0019
+                        dw 001D
+                        dw 0021
+                        dw 0025
+                        dw 002A
+                        dw 002F
+                        dw 0034
+                        dw 0039
+                        dw 003E
+                        dw 0043
+                        dw 0049
+                        dw 004F
+                        dw 0055
+                        dw 005A
+                        dw 0061
+                        dw 0067
+                        dw 006D
+                        dw 0073
+                        dw 0079
+                        dw 007F
+                        dw 0086
+                        dw 008C
+                        dw 0092
+                        dw 0098
+                        dw 009E
+                        dw 00A5
+                        dw 00AA
+                        dw 00B0
+                        dw 00B6
+                        dw 00BC
+                        dw 00C1
+                        dw 00C6
+                        dw 00CB
+                        dw 00D0
+                        dw 00D5
+                        dw 00DA
+                        dw 00DE
+                        dw 00E2
+                        dw 00E6
+                        dw 00EA
+                        dw 00ED
+                        dw 00F0
+                        dw 00F3
+                        dw 00F5
+                        dw 00F8
+                        dw 00FA
+                        dw 00FB
+                        dw 00FD
+                        dw 00FE
+                        dw 00FE
+                        dw 00FF
+                        dw 00FF
+                        dw 00FF
+                        dw 00FE
+                        dw 00FE
+                        dw 00FD
+                        dw 00FB
+                        dw 00FA
+                        dw 00F8
+                        dw 00F5
+                        dw 00F3
+                        dw 00F0
+                        dw 00ED
+                        dw 00EA
+                        dw 00E6
+                        dw 00E2
+                        dw 00DE
+                        dw 00DA
+                        dw 00D5
+                        dw 00D0
+                        dw 00CB
+                        dw 00C6
+                        dw 00C1
+                        dw 00BC
+                        dw 00B6
+                        dw 00B0
+                        dw 00AA
+                        dw 00A5
+                        dw 009E
+                        dw 0098
+                        dw 0092
+                        dw 008C
+                        dw 0086
+                        dw 0080
+                        dw 0079
+                        dw 0073
+                        dw 006D
+                        dw 0067
+                        dw 0061
+                        dw 005A
+                        dw 0055
+                        dw 004F
+                        dw 0049
+                        dw 0043
+                        dw 003E
+                        dw 0039
+                        dw 0034
+                        dw 002F
+                        dw 002A
+                        dw 0025
+                        dw 0021
+                        dw 001D
+                        dw 0019
+                        dw 0015
+                        dw 0012
+                        dw 000F
+                        dw 000C
+                        dw 000A
+                        dw 0007
+                        dw 0005
+                        dw 0004
+                        dw 0002
+                        dw 0001
+                        dw 0001
+                        dw 0000
+                        dw 0000
+                        dw 0000
+                        dw 0001
+                        dw 0001
+                        dw 0002
+                        dw 0004
+                        dw 0005
+                        dw 0007
+                        dw 000A
+                        dw 000C
+                        dw 000F
+                        dw 0012
+                        dw 0015
+                        dw 0019
+                        dw 001D
+                        dw 0021
+                        dw 0025
+                        dw 002A
+                        dw 002F
+                        dw 0034
+                        dw 0039
+                        dw 003E
+                        dw 0043
+                        dw 0049
+                        dw 004F
+                        dw 0055
+                        dw 005A
+                        dw 0061
+                        dw 0067
+                        dw 006D
+                        dw 0073
+                        dw 0079

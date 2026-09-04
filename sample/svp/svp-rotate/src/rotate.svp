@@ -1,0 +1,547 @@
+# ---------------------------------------------------------------------------
+#  rotate.svp
+#
+#  SVP (Samsung SSP1601) side of the SGDK 'svp-rotate' demo.
+#
+#  Every frame the DSP rotates eight points around the screen centre using the
+#  SSP1601 hardware multiplier and writes the finished screen coordinates into
+#  the DRAM shared with the 68000, which only has to drop sprites on them.
+#  This is the job the SVP was actually put in the cartridge to do.
+#
+#  The multiplier is a signed Q15 fractional unit: with X an integer and Y a
+#  sine scaled to +-32767, `ld a, p` leaves X * (Y/32768) in the high word of
+#  the accumulator, which is exactly x*cos or y*sin with no shifting. `add a,
+#  p` and `sub a, p` then accumulate the second term of the rotation directly.
+#
+#  DRAM layout, from word 0: x0, y0, x1, y1, ... x7, y7 (8 points, 16 words).
+#
+#  Assembled by 'ssp16asm', injected at cartridge byte 0x800 by the SGDK build.
+#
+#  NOTE: like plasma.svp this file never uses `ld a, A[nn]` / `ld a, B[nn]`.
+#  ssp16asm counts that instruction as zero words in its symbol pass, which
+#  silently shifts every label defined after it. RAM is reached through the
+#  pointer registers instead, which assemble correctly.
+# ---------------------------------------------------------------------------
+
+CmdFrame:           EQU 0x0001      # "rotate the points once"
+ReplyDone:          EQU 0x0055      # "the coordinates are in DRAM"
+
+CentreX:            EQU 0x0098      # 152 = screen centre minus half a 16x16 sprite
+CentreY:            EQU 0x0068      # 104
+
+QuarterTurn:        EQU 0x0040      # 64 of 256 entries: cos = sin shifted 90 deg
+AngleStep:          EQU 0x0002      # rotation speed, table entries per frame
+
+StMailbox:          EQU 0x0000
+StExtMem:           EQU 0x0030
+Pm0M68kWrote:       EQU 0x0002
+
+DramStart:          EQU 0x0000
+DramAutoInc:        EQU 0x0818
+
+org 400
+
+# ---------------------------------------------------------------------------
+#  boot: copy the signed sine table into internal RAM bank A
+# ---------------------------------------------------------------------------
+
+start:                  eor a, a
+                        ld st, @StMailbox
+                        ldi r6, 00              # rotation angle
+
+                        ldi r0, 00
+copySine:               ld a, r0
+                        addi a, @SineTable
+                        ld y, (a)
+                        ld a, y
+                        ld (r0+), a
+                        ld a, r0
+                        cmpi a, 0000
+                        bra z=0, @copySine
+
+# ---------------------------------------------------------------------------
+#  main loop
+# ---------------------------------------------------------------------------
+
+waitCommand:            ld a, ext0
+                        andi a, @Pm0M68kWrote
+                        bra z=1, @waitCommand
+                        ld x, ext3
+
+# sin and cos of the current angle, parked in RAM bank B so the multiplier can
+# reload them for every point without touching the program space table again
+                        ld a, r6
+                        ld r0, a
+                        ld y, (r0)              # sin(angle)
+                        ldi r4, 00
+                        ld a, y
+                        ld (r4), a              # RAM1[0] = sin
+
+                        ld a, r6
+                        addi a, @QuarterTurn    # r1 is 8 bit, so this wraps
+                        ld r1, a
+                        ld y, (r1)              # cos(angle)
+                        ldi r4, 01
+                        ld a, y
+                        ld (r4), a              # RAM1[1] = cos
+
+                        ld st, @StExtMem
+                        ld ext6, @DramStart
+                        ld ext6, @DramAutoInc
+                        ld ext0, -
+
+# ---- point 0: (24, 0) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, 0018
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, 0000
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, 0018
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, 0000
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+# ---- point 1: (23, 23) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, 0017
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, 0017
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, 0017
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, 0017
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+# ---- point 2: (0, 42) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, 0000
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, 002A
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, 0000
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, 002A
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+# ---- point 3: (-36, 36) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, FFDC
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, 0024
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, FFDC
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, 0024
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+# ---- point 4: (-60, 0) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, FFC4
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, 0000
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, FFC4
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, 0000
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+# ---- point 5: (-49, -49) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, FFCF
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, FFCF
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, FFCF
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, FFCF
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+# ---- point 6: (0, -78) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, 0000
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, FFB2
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, 0000
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, FFB2
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+# ---- point 7: (62, -62) ----------------------------------------------
+                        ldi r4, 01
+                        ld x, 003E
+                        ld y, (r4)              # cos
+                        ld a, p                 # A = x * cos
+                        ldi r4, 00
+                        ld x, FFC2
+                        ld y, (r4)              # sin
+                        sub a, p                # A = x*cos - y*sin
+                        addi a, @CentreX
+                        ld ext0, a              # screen x
+
+                        ldi r4, 00
+                        ld x, 003E
+                        ld y, (r4)              # sin
+                        ld a, p                 # A = x * sin
+                        ldi r4, 01
+                        ld x, FFC2
+                        ld y, (r4)              # cos
+                        add a, p                # A = x*sin + y*cos
+                        addi a, @CentreY
+                        ld ext0, a              # screen y
+
+                        ld a, r6                # advance the angle
+                        addi a, @AngleStep
+                        ld r6, a                # r6 is 8 bit, wraps on its own
+
+                        ld st, @StMailbox
+                        ld ext3, @ReplyDone
+                        bra always, @waitCommand
+
+# ---------------------------------------------------------------------------
+#  256 entry signed sine table, one period scaled to +-32767 (Q15).
+#  Four hex digits per entry on purpose: ssp16asm mis-sizes a `dw` whose
+#  operand has one or two digits.
+# ---------------------------------------------------------------------------
+
+SineTable:
+                        dw 0000
+                        dw 0324
+                        dw 0648
+                        dw 096A
+                        dw 0C8C
+                        dw 0FAB
+                        dw 12C8
+                        dw 15E2
+                        dw 18F9
+                        dw 1C0B
+                        dw 1F1A
+                        dw 2223
+                        dw 2528
+                        dw 2826
+                        dw 2B1F
+                        dw 2E11
+                        dw 30FB
+                        dw 33DF
+                        dw 36BA
+                        dw 398C
+                        dw 3C56
+                        dw 3F17
+                        dw 41CE
+                        dw 447A
+                        dw 471C
+                        dw 49B4
+                        dw 4C3F
+                        dw 4EBF
+                        dw 5133
+                        dw 539B
+                        dw 55F5
+                        dw 5842
+                        dw 5A82
+                        dw 5CB3
+                        dw 5ED7
+                        dw 60EB
+                        dw 62F1
+                        dw 64E8
+                        dw 66CF
+                        dw 68A6
+                        dw 6A6D
+                        dw 6C23
+                        dw 6DC9
+                        dw 6F5E
+                        dw 70E2
+                        dw 7254
+                        dw 73B5
+                        dw 7504
+                        dw 7641
+                        dw 776B
+                        dw 7884
+                        dw 7989
+                        dw 7A7C
+                        dw 7B5C
+                        dw 7C29
+                        dw 7CE3
+                        dw 7D89
+                        dw 7E1D
+                        dw 7E9C
+                        dw 7F09
+                        dw 7F61
+                        dw 7FA6
+                        dw 7FD8
+                        dw 7FF5
+                        dw 7FFF
+                        dw 7FF5
+                        dw 7FD8
+                        dw 7FA6
+                        dw 7F61
+                        dw 7F09
+                        dw 7E9C
+                        dw 7E1D
+                        dw 7D89
+                        dw 7CE3
+                        dw 7C29
+                        dw 7B5C
+                        dw 7A7C
+                        dw 7989
+                        dw 7884
+                        dw 776B
+                        dw 7641
+                        dw 7504
+                        dw 73B5
+                        dw 7254
+                        dw 70E2
+                        dw 6F5E
+                        dw 6DC9
+                        dw 6C23
+                        dw 6A6D
+                        dw 68A6
+                        dw 66CF
+                        dw 64E8
+                        dw 62F1
+                        dw 60EB
+                        dw 5ED7
+                        dw 5CB3
+                        dw 5A82
+                        dw 5842
+                        dw 55F5
+                        dw 539B
+                        dw 5133
+                        dw 4EBF
+                        dw 4C3F
+                        dw 49B4
+                        dw 471C
+                        dw 447A
+                        dw 41CE
+                        dw 3F17
+                        dw 3C56
+                        dw 398C
+                        dw 36BA
+                        dw 33DF
+                        dw 30FB
+                        dw 2E11
+                        dw 2B1F
+                        dw 2826
+                        dw 2528
+                        dw 2223
+                        dw 1F1A
+                        dw 1C0B
+                        dw 18F9
+                        dw 15E2
+                        dw 12C8
+                        dw 0FAB
+                        dw 0C8C
+                        dw 096A
+                        dw 0648
+                        dw 0324
+                        dw 0000
+                        dw FCDC
+                        dw F9B8
+                        dw F696
+                        dw F374
+                        dw F055
+                        dw ED38
+                        dw EA1E
+                        dw E707
+                        dw E3F5
+                        dw E0E6
+                        dw DDDD
+                        dw DAD8
+                        dw D7DA
+                        dw D4E1
+                        dw D1EF
+                        dw CF05
+                        dw CC21
+                        dw C946
+                        dw C674
+                        dw C3AA
+                        dw C0E9
+                        dw BE32
+                        dw BB86
+                        dw B8E4
+                        dw B64C
+                        dw B3C1
+                        dw B141
+                        dw AECD
+                        dw AC65
+                        dw AA0B
+                        dw A7BE
+                        dw A57E
+                        dw A34D
+                        dw A129
+                        dw 9F15
+                        dw 9D0F
+                        dw 9B18
+                        dw 9931
+                        dw 975A
+                        dw 9593
+                        dw 93DD
+                        dw 9237
+                        dw 90A2
+                        dw 8F1E
+                        dw 8DAC
+                        dw 8C4B
+                        dw 8AFC
+                        dw 89BF
+                        dw 8895
+                        dw 877C
+                        dw 8677
+                        dw 8584
+                        dw 84A4
+                        dw 83D7
+                        dw 831D
+                        dw 8277
+                        dw 81E3
+                        dw 8164
+                        dw 80F7
+                        dw 809F
+                        dw 805A
+                        dw 8028
+                        dw 800B
+                        dw 8001
+                        dw 800B
+                        dw 8028
+                        dw 805A
+                        dw 809F
+                        dw 80F7
+                        dw 8164
+                        dw 81E3
+                        dw 8277
+                        dw 831D
+                        dw 83D7
+                        dw 84A4
+                        dw 8584
+                        dw 8677
+                        dw 877C
+                        dw 8895
+                        dw 89BF
+                        dw 8AFC
+                        dw 8C4B
+                        dw 8DAC
+                        dw 8F1E
+                        dw 90A2
+                        dw 9237
+                        dw 93DD
+                        dw 9593
+                        dw 975A
+                        dw 9931
+                        dw 9B18
+                        dw 9D0F
+                        dw 9F15
+                        dw A129
+                        dw A34D
+                        dw A57E
+                        dw A7BE
+                        dw AA0B
+                        dw AC65
+                        dw AECD
+                        dw B141
+                        dw B3C1
+                        dw B64C
+                        dw B8E4
+                        dw BB86
+                        dw BE32
+                        dw C0E9
+                        dw C3AA
+                        dw C674
+                        dw C946
+                        dw CC21
+                        dw CF05
+                        dw D1EF
+                        dw D4E1
+                        dw D7DA
+                        dw DAD8
+                        dw DDDD
+                        dw E0E6
+                        dw E3F5
+                        dw E707
+                        dw EA1E
+                        dw ED38
+                        dw F055
+                        dw F374
+                        dw F696
+                        dw F9B8
+                        dw FCDC

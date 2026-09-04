@@ -127,9 +127,11 @@
  * The linker keeps cartridge bytes 0x800 to 0x800 + #SVP_PROGRAM_SIZE free of
  * 68000 code (see the \c .svp_program section in <i>md.ld</i>) and the build
  * injects the assembled <i>.svp</i> file there. A project needing more room
- * rebuilds the library with <code>EXTRA_FLAGS=-DSVP_PROGRAM_SIZE=...</code>.
- * The build reads the resulting area back out of the linked ELF, so there is
- * nothing to keep in sync on the project side.
+ * rebuilds the library with <code>EXTRA_FLAGS=-DSVP_PROGRAM_SIZE=...</code>,
+ * after a <code>make -f makelib.gen clean</code> (a command line variable does
+ * not make the existing object out of date). The build reads the resulting
+ * area back out of the linked ELF, so there is nothing to keep in sync on the
+ * project side.
  *
  * \note The reservation only exists in projects that link the SVP module in,
  * so it costs nothing to a project that does not use the SVP.

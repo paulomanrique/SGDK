@@ -18,6 +18,8 @@ target.
 | `inc/svp/svp.h` | 68000 side C API and the `SVP_ROM_NOTES` header macro |
 | `src/svp/svp.c` | its implementation, plus the reserved cartridge program area |
 | `sample/svp/hello-svp/` | end to end sample: DSP writes DRAM and answers the mailbox, 68000 checks it and prints PASS or FAIL |
+| `sample/svp/svp-plasma/` | demo: the DSP renders an animated plasma as finished tilemap words, the 68000 only DMAs it |
+| `sample/svp/svp-rotate/` | demo: the DSP rotates points with its hardware multiplier, the 68000 only places sprites |
 | `makefile.gen`, `common.mk`, `md.ld` | build integration (the only pre-existing files touched) |
 
 ## The hardware
@@ -110,6 +112,29 @@ knowing when writing `.svp` code, and both are avoided in the sample:
 * `dw` with a 1 to 2 digit value emits a word but only advances the first pass
   symbol table by zero, so every label after such a line gets a wrong address.
   Always give `dw` a 4 digit value.
+* **`ld a, A[nn]` and `ld a, B[nn]` are miscounted the same way**, and this one
+  is not documented upstream. The instruction emits one word but the symbol
+  pass credits it with zero, so every label defined after it is one word too
+  low and every branch to such a label jumps one instruction early. The emitted
+  opcodes are correct; only the symbol table is wrong, which makes the failure
+  silent and very hard to read. Minimal reproduction:
+
+  ```
+  org 400
+      ld a, B[00]
+      ld a, x
+  L:  ld a, x
+  ```
+
+  `L` is reported at `0401` where the first two instructions plainly occupy two
+  words, so it should be `0402`. One word is lost per occurrence. Both demos
+  therefore avoid the RAM bank direct load entirely and reach internal RAM
+  through the pointer registers (`ld a, (r0)`, `ld (r4), a`), which assemble
+  and count correctly. The store direction, `ld B[nn], a`, is also fine.
+
+  This cost real debugging time here: the first plasma build hung because
+  `rowLoop` resolved one word early, onto the `ldi r5, 1C` that reloads the row
+  counter, so the loop reset its own counter forever.
 
 ## Build integration
 
@@ -137,8 +162,16 @@ To give the DSP more room, rebuild the library with a bigger area. The size
 lives in one place only, so nothing has to be kept in sync:
 
 ```sh
+make -f makelib.gen clean
 make -f makelib.gen EXTRA_FLAGS=-DSVP_PROGRAM_SIZE=0x2000
 ```
+
+The `clean` is required and not decoration: changing a variable on the make
+command line does not make the existing `svp.o` out of date, so without it the
+library is silently relinked with the old size and the reservation does not
+grow. Check the result with
+`m68k-elf-nm -S out/release/rom.out | grep SVP_program`, whose second column is
+the size actually reserved.
 
 ## Declaring the header
 
@@ -179,6 +212,47 @@ make -f ../../../makefile.gen
 mailbox; the DSP writes `0xC0DE` into DRAM word 0 and answers with the
 complement of the command; the 68000 checks both and prints `PASS` or `FAIL`.
 There is no 3D and no rendering, only the plumbing.
+
+## The two demos
+
+Both follow the same division of labour the SVP was built for: the DSP does the
+arithmetic and leaves a finished result in DRAM, and the 68000 does nothing but
+move bytes.
+
+### svp-plasma
+
+The DSP renders a full screen animated plasma, 64 by 28 cells, straight into
+DRAM as ready made VDP tilemap words. The 68000 never computes a pixel: it
+waits for the "frame ready" answer and issues a single DMA from cartridge DRAM
+into video memory. Plane A is 64 tiles wide, so 28 rows of 64 words are one
+contiguous block and one transfer.
+
+The sine table is copied into internal RAM bank A at boot. Bank A is exactly
+256 words and the pointer registers are 8 bit, so `ld a, (r0+)` walks the table
+and wraps around by itself: the inner loop needs no masking at all, which is
+what makes nine instructions per cell enough.
+
+### svp-rotate
+
+The DSP rotates eight points around the screen centre every frame and writes
+the finished screen coordinates into DRAM; the 68000 reads them back with
+`SVP_readDRAM()` (which brackets the access with the halt guard) and drops
+sprites on them.
+
+This one exercises the multiplier. It is a signed Q15 fractional unit: with X
+an integer and Y a sine scaled to +-32767, `ld a, p` leaves `X * (Y/32768)` in
+the high word of the accumulator, which is exactly `x*cos` with no shifting.
+`add a, p` and `sub a, p` then fold in the second term, so a full
+`x*cos - y*sin` needs six instructions and no temporary storage:
+
+```
+ld x, <x>
+ld y, (r4)      # cos, parked in RAM bank B
+ld a, p         # A = x * cos
+ld x, <y>
+ld y, (r4)      # sin
+sub a, p        # A = x*cos - y*sin
+```
 
 ## Emulators
 
