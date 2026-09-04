@@ -258,9 +258,20 @@ sub a, p        # A = x*cos - y*sin
 
 **Genesis Plus GX is the only emulator that detects the SVP the way the
 hardware does**, by checking for `"SV"` at `0x1C8` (`md_cart_init()` in
-`core/cart_hw/md_cart.c`). ares, MAME and PicoDrive instead check whether the
-cartridge title is `Virtua Racing`, so a correct homebrew SVP ROM will simply
-run without a DSP on them. That is not a bug in your ROM.
+`core/cart_hw/md_cart.c`). ares, MAME, PicoDrive and Kega Fusion instead look
+at the cartridge title, so a correct homebrew SVP ROM runs without a DSP on
+them unless it claims to be Virtua Racing.
+
+The samples here satisfy both. Their overseas name at ROM offset `0x150` starts
+with `VIRTUA RACING` and then names the demo, for example
+`VIRTUA RACING SVP PLASMA`. That works because the title check is a prefix
+compare: PicoDrive's `carthw.cfg` carries `check_str=0x150,"VIRTUA RACING"` and
+`rom_strcmp()` only compares `strlen()` characters, so the tail of the field is
+free. Genesis Plus GX ignores the title entirely and still keys off the `"SV"`
+marker, so nothing regresses there.
+
+If you write your own SVP project and it runs on Genesis Plus GX but shows
+nothing anywhere else, this title is the first thing to check.
 
 ```sh
 retroarch -L /usr/lib/libretro/genesis_plus_gx_libretro.so out/rom.bin
