@@ -59,6 +59,8 @@ static void setPlasmaPalette(void)
 
 int main(bool hardReset)
 {
+    bool started = FALSE;
+
     VDP_setScreenWidth320();
     VDP_setBackgroundColor(0);
 
@@ -71,22 +73,35 @@ int main(bool hardReset)
     }
 
     loadColorTiles();
-    setPlasmaPalette();
+
+    // The plasma palette is installed only once the DSP has actually answered.
+    // It is a blue to red ramp with no white in it, so any message drawn while
+    // it is active would be invisible, and a silent blue screen is exactly the
+    // wrong thing to show someone whose emulator did not attach the SVP.
+    VDP_drawText("Waiting for the SVP...", 2, 12);
 
     SVP_reset();
 
     while(TRUE)
     {
-        u16 reply;
-
         // Ask the DSP for a frame and wait until it says DRAM is ready. The
         // DSP is idle between its reply and the next command, so nothing can
         // touch DRAM while the DMA below reads it and no halt guard is needed.
-        if (!SVP_waitReply(SVP_CMD_FRAME, &reply, SVP_TIMEOUT) || (reply != SVP_REPLY_DONE))
+        if (!SVP_waitDRAMReply(SVP_CMD_FRAME, SVP_STATUS_WORD, SVP_REPLY_DONE, SVP_TIMEOUT))
         {
-            VDP_drawText("The SVP stopped answering.", 2, 12);
+            VDP_clearTextArea(0, 10, 40, 8);
+            VDP_drawText("The SVP never answered.", 2, 12);
+            VDP_drawText("This emulator did not attach it.", 2, 13);
 
             while(TRUE) SYS_doVBlankProcess();
+        }
+
+        // first good frame: clear the notice and switch to the plasma ramp
+        if (!started)
+        {
+            VDP_clearTextArea(0, 10, 40, 8);
+            setPlasmaPalette();
+            started = TRUE;
         }
 
         // The DSP produced finished tilemap words, so the 68000 only moves

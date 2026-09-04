@@ -36,6 +36,9 @@ StMailbox:          EQU 0x0000      # ext0 = PM0 status, ext3 = XST mailbox
 StExtMem:           EQU 0x0030      # ext0..ext7 = external memory pointers
 Pm0M68kWrote:       EQU 0x0002      # PM0 bit raised when the 68000 writes XST
 
+StatusWord:         EQU 0x7FF0      # DRAM word used as the "frame finished" flag
+FlagDone:           EQU 0x0055      # value written there
+DramPlain:          EQU 0x0018      # DRAM, no auto-increment
 DramStart:          EQU 0x0000      # DRAM word 0
 DramAutoInc:        EQU 0x0818      # DRAM, auto-increment one word per write
 
@@ -46,6 +49,18 @@ RowStepY:           EQU 0x0009      # vertical frequency
 RowStepX:           EQU 0x0003      # horizontal shear, gives the diagonal look
 
 org 400
+
+# Every emulator attaches the SVP by a different rule. Genesis Plus GX keys off
+# the "SV" marker in the ROM header; PicoDrive additionally demands the four
+# bytes "OHMP" at cartridge byte 0x810, which is DSP program word 0x408 - right
+# inside the code area, where Virtua Racing happens to have them. So the entry
+# point is a jump over a two word data island holding exactly that.
+
+entry:                  bra always, @start
+
+org 408
+                        dw 4F48             # 'O','H' at cartridge byte 0x810
+                        dw 4D50             # 'M','P'
 
 # ---------------------------------------------------------------------------
 #  boot: copy the sine table from cartridge ROM into internal RAM bank A
@@ -200,6 +215,17 @@ cellGroup:
                         ld r6, a                # r6 is 8 bit, so it wraps by itself
 
                         ld st, @StMailbox       # ext3 is the mailbox again
+
+# Raise a flag in DRAM as well as answering the mailbox. Kega Fusion executes
+# SVP code and emulates DRAM correctly but never returns anything from XST, and
+# Virtua Racing itself synchronises through DRAM, so the flag is the portable
+# signal and the mailbox answer is a bonus for the emulators that support it.
+                        ld st, @StExtMem
+                        ld ext6, @StatusWord
+                        ld ext6, @DramPlain
+                        ld ext0, -
+                        ld ext0, @FlagDone
+                        ld st, @StMailbox
                         ld ext3, @ReplyDone     # tell the 68000 the frame is up
                         bra always, @waitCommand
 

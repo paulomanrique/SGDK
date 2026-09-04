@@ -84,6 +84,26 @@ bool SVP_waitReply(u16 cmd, u16 *reply, u16 timeout)
 }
 
 
+bool SVP_waitDRAMReply(u16 cmd, u16 offset, u16 expected, u16 timeout)
+{
+    vu16* flag = ((vu16*) SVP_DRAM) + offset;
+    u16 remaining = timeout;
+
+    // clear it first, so a stale value cannot pass for a fresh answer
+    *flag = ~expected;
+
+    SVP_sendCommand(cmd);
+
+    while(TRUE)
+    {
+        if (*flag == expected) return TRUE;
+
+        // timeout == 0 means wait forever
+        if (timeout && (--remaining == 0)) return FALSE;
+    }
+}
+
+
 void SVP_reset(void)
 {
     // make sure the DSP is running whatever the previous halt state was

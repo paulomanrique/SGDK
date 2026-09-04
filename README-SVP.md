@@ -256,45 +256,69 @@ sub a, p        # A = x*cos - y*sin
 
 ## Emulators
 
-**Genesis Plus GX is the only emulator that detects the SVP the way the
-hardware does**, by checking for `"SV"` at `0x1C8` (`md_cart_init()` in
-`core/cart_hw/md_cart.c`). ares, MAME, PicoDrive and Kega Fusion instead look
-at the cartridge title, so a correct homebrew SVP ROM runs without a DSP on
-them unless it claims to be Virtua Racing.
+All three samples were verified on **Genesis Plus GX**, **PicoDrive** and
+**Kega Fusion**. Getting there took three separate compatibility fixes, because
+every emulator attaches and drives the SVP differently.
 
-The samples here satisfy both. Their overseas name at ROM offset `0x150` starts
-with `VIRTUA RACING` and then names the demo, for example
-`VIRTUA RACING SVP PLASMA`. That works because the title check is a prefix
-compare: PicoDrive's `carthw.cfg` carries `check_str=0x150,"VIRTUA RACING"` and
-`rom_strcmp()` only compares `strlen()` characters, so the tail of the field is
-free. Genesis Plus GX ignores the title entirely and still keys off the `"SV"`
-marker, so nothing regresses there.
+### Making the chip attach
 
-If you write your own SVP project and it runs on Genesis Plus GX but shows
-nothing anywhere else, this title is the first thing to check.
+| emulator | what it keys on |
+|---|---|
+| Genesis Plus GX | `"SV"` at ROM offset `0x1C8` (`md_cart_init()`, `core/cart_hw/md_cart.c`) |
+| Kega Fusion | the same marker, as far as could be observed |
+| PicoDrive | **both** `"VIRTUA RACING"` at `0x150` **and** `"OHMP"` at `0x810` (`carthw_cfg.c`) |
+
+PicoDrive's second condition is the surprising one: `0x810` is cartridge byte
+`0x810`, which is DSP program word `0x408` — inside the code area, where Virtua
+Racing happens to have those bytes in the middle of its own program. The
+samples satisfy it with a two word data island that the entry point jumps over,
+so it costs two instructions and no behaviour.
+
+The overseas name at `0x150` is `VIRTUA RACING`; each sample's real name lives
+in the domestic title at `0x120`, which nothing inspects.
+
+### Driving it: use DRAM, not the mailbox
+
+The mailbox is only reliable in one direction. Measured, not assumed:
+
+| path | Genesis Plus GX | PicoDrive | Kega Fusion |
+|---|---|---|---|
+| DSP executes cartridge code | yes | yes | yes |
+| DSP writes DRAM | yes | yes | yes |
+| 68000 to DSP through XST | yes | yes | yes |
+| DSP to 68000 through XST | yes | yes | **no**, `0xA15000` always reads `0xFFFF` |
+
+So a DSP to 68000 answer that goes through the mailbox silently never arrives
+on Kega Fusion. Virtua Racing itself never reads `0xA15004` at all — it
+synchronises through DRAM — which is presumably why that path is untested
+there. Use #SVP_waitDRAMReply(): the DSP raises a flag in a DRAM word and the
+68000 polls it. All three samples do that, and keep the mailbox answer as a
+bonus where it works.
 
 ```sh
 retroarch -L /usr/lib/libretro/genesis_plus_gx_libretro.so out/rom.bin
+retroarch -L /usr/lib/libretro/picodrive_libretro.so out/rom.bin
 ```
 
-The core path is distribution dependent; a RetroArch that downloaded the core
-itself keeps it in `~/.config/retroarch/cores/genesis_plus_gx_libretro.so`.
+The core path is distribution dependent; a RetroArch that downloaded the cores
+itself keeps them in `~/.config/retroarch/cores/`.
 
-Two things Genesis Plus GX does that differ from the contract above, worth
-knowing before you debug a phantom problem:
+Two things Genesis Plus GX does that differ from the contract above:
 
 * **`0xA15006` is not implemented.** Only `0xA15000`, `0xA15002` and `0xA15004`
   are decoded (`ctrl_io_write_word` / `ctrl_io_read_word`, `case 0x50`, in
   `core/mem68k.c`); everything else in that block is discarded on write and
   reads back as open bus. The halt guard in this API is therefore a no-op under
-  Genesis Plus GX. It is still correct to use it — the emulator runs the 68000
-  and the DSP serially per scanline, so there is no bus contention to guard
-  against there, but real hardware has it.
+  Genesis Plus GX. Kega Fusion does react to it: writing 1 there changes what
+  `0xA15004` reads back.
 * **The header entry point is ignored.** `ssp1601_reset()` unconditionally sets
   the DSP program counter to word `0x400`, so the emulator never runs the
   internal boot ROM and never reads offset `0x1CE`. Keep the entry point at
-  `SVP_ENTRY_POINT` (`0x400`) if you want the same code to run on both the
-  emulator and real hardware.
+  `SVP_ENTRY_POINT` (`0x400`) so the same code runs everywhere.
+
+Worth knowing about the real hardware contract as well: Virtua Racing's 68000
+writes `0x0001` to `0xA15006` during start up, before the `0x000A` / `0x0000`
+pair it uses around DMA. What that write does is not established here.
 
 The internal SVP ROM at `0xFC00` is not present in Genesis Plus GX either, so
 its library routines and the sine table are unavailable under emulation.

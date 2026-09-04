@@ -80,9 +80,7 @@ int main(bool hardReset)
 
     while(TRUE)
     {
-        u16 reply;
-
-        if (!SVP_waitReply(SVP_CMD_FRAME, &reply, SVP_TIMEOUT) || (reply != SVP_REPLY_DONE))
+        if (!SVP_waitDRAMReply(SVP_CMD_FRAME, SVP_STATUS_WORD, SVP_REPLY_DONE, SVP_TIMEOUT))
         {
             VDP_drawText("The SVP stopped answering.", 4, 12);
 

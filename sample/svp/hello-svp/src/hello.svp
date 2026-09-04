@@ -42,6 +42,8 @@ Pm0M68kWrote:       EQU 0x0002
 # second one is the mode word. Mode 0x0018 selects the DRAM the 68000 sees at
 # 0x300000, with no auto increment. DRAM word N is at 68000 address
 # 0x300000 + 2 * N, so the address word is simply N.
+StatusWord:         EQU 0x7FF0      # DRAM word used as the "work finished" flag
+FlagDone:           EQU 0x0055      # value written there
 DramWord0:          EQU 0x0000
 DramMode:           EQU 0x0018
 
@@ -50,6 +52,18 @@ DramMode:           EQU 0x0018
 # The SVP boot code enters cartridge code at the word address held in the ROM
 # header at 0x1CE, which this sample sets to 0x400 (cartridge byte 0x800).
 org 400
+
+# Every emulator attaches the SVP by a different rule. Genesis Plus GX keys off
+# the "SV" marker in the ROM header; PicoDrive additionally demands the four
+# bytes "OHMP" at cartridge byte 0x810, which is DSP program word 0x408 - right
+# inside the code area, where Virtua Racing happens to have them. So the entry
+# point is a jump over a two word data island holding exactly that.
+
+entry:                  bra always, @start
+
+org 408
+                        dw 4F48             # 'O','H' at cartridge byte 0x810
+                        dw 4D50             # 'M','P'
 
 start:                  eor a, a                    # clear the full 32 bit accumulator
                         ld st, @StMailbox
@@ -78,6 +92,17 @@ waitCommand:            ld a, ext0
 
                         ld a, x
                         eori a, FFFF
+
+# Raise a flag in DRAM as well as answering the mailbox. Kega Fusion executes
+# SVP code and emulates DRAM correctly but never returns anything from XST, and
+# Virtua Racing itself synchronises through DRAM, so the flag is the portable
+# signal and the mailbox answer is a bonus for the emulators that support it.
+                        ld st, @StExtMem
+                        ld ext6, @StatusWord
+                        ld ext6, @DramMode
+                        ld ext0, -
+                        ld ext0, @FlagDone
+                        ld st, @StMailbox
                         ld ext3, a                  # raises PM0 bit 0 for the 68000
                         bra always, @waitCommand
 

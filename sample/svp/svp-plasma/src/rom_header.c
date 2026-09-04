@@ -7,13 +7,13 @@
 // The overseas name at 0x150 starts with "VIRTUA RACING" on purpose. Genesis
 // Plus GX attaches the SVP from the "SV" marker below, but PicoDrive, ares,
 // MAME and Kega Fusion instead look for that title, and PicoDrive compares
-// only its 13 characters, so the rest of the field can still name the demo.
+// it exactly, and the demo name lives in the domestic title above.
 __attribute__((externally_visible))
 const ROMHeader rom_header = {
     "SEGA MEGA DRIVE ",
     "(C)SGDK 2026    ",
     "SVP PLASMA DEMO                                 ",
-    "VIRTUA RACING SVP PLASMA                        ",
+    "VIRTUA RACING                                   ",
     "GM 00000000-00",
     0x000,
     "JD              ",

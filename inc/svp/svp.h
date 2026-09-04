@@ -288,6 +288,43 @@ bool SVP_waitReply(u16 cmd, u16 *reply, u16 timeout);
 
 /**
  *  \brief
+ *      DRAM word the samples use as their "work finished" flag.
+ *
+ * Far past any data they produce, so the flag never collides with it.
+ *
+ *  \see SVP_waitDRAMReply()
+ */
+#define SVP_STATUS_WORD             0x7FF0
+
+/**
+ *  \brief
+ *      Send a command to the DSP and wait for it to raise a flag in DRAM.
+ *  \param cmd
+ *      The command word to send through the mailbox.
+ *  \param offset
+ *      Word offset in DRAM the DSP writes when it is done, normally
+ *      #SVP_STATUS_WORD.
+ *  \param expected
+ *      The value the DSP writes there.
+ *  \param timeout
+ *      Maximum number of poll iterations, 0 means wait forever.
+ *  \return
+ *      TRUE if the DSP raised the flag, FALSE on timeout.
+ *
+ * Prefer this over #SVP_waitReply() for anything that has to run on more than
+ * one emulator. The 68000 to DSP half of the mailbox works everywhere, but the
+ * DSP to 68000 half does not: Kega Fusion executes SVP code and emulates DRAM
+ * correctly, yet reads of #SVP_XST always return 0xFFFF. Virtua Racing never
+ * reads the status register either, it synchronises through DRAM, so that path
+ * is simply untested territory in some emulators.
+ *
+ * The flag is cleared before the command is sent, so a value left over from a
+ * previous exchange cannot be mistaken for a fresh one.
+ */
+bool SVP_waitDRAMReply(u16 cmd, u16 offset, u16 expected, u16 timeout);
+
+/**
+ *  \brief
  *      Reset the mailbox to a known state.
  *
  * Drains any word the DSP left in the mailbox, clears the status register and
